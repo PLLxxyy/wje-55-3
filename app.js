@@ -176,6 +176,59 @@ function getEmotionCategory(emotion) {
   return found ? found.category : null;
 }
 
+function formatDateTime(isoString) {
+  const date = new Date(isoString);
+  const now = new Date();
+  const diffMs = now - date;
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+  
+  if (diffMins < 1) return '刚刚';
+  if (diffMins < 60) return `${diffMins}分钟前`;
+  if (diffHours < 24) return `${diffHours}小时前`;
+  if (diffDays < 7) return `${diffDays}天前`;
+  
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hour = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  
+  if (year === now.getFullYear()) {
+    return `${month}-${day} ${hour}:${min}`;
+  }
+  return `${year}-${month}-${day}`;
+}
+
+function showToast(message, type = 'info', duration = 3000) {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  
+  container.appendChild(toast);
+  
+  requestAnimationFrame(() => {
+    toast.classList.add('show');
+  });
+  
+  setTimeout(() => {
+    toast.classList.remove('show');
+    setTimeout(() => {
+      if (toast.parentNode) {
+        toast.parentNode.removeChild(toast);
+      }
+    }, 300);
+  }, duration);
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
 // ==================== 俳句生成 ====================
 function generateHaiku(emotion) {
   let line1Options = SYLLABLES_5.nature.slice();
@@ -495,7 +548,8 @@ function toggleFavorite() {
     haiku: { ...currentHaiku },
     style: currentStyle,
     imageUrl: currentImageUrl,
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    source: 'favorite'
   };
   
   const existingIndex = favorites.findIndex(f => 
@@ -527,7 +581,7 @@ function updateFavoriteButton() {
   btn.innerHTML = isFavorited ? '❤ 已收藏' : '♡ 收藏';
 }
 
-function renderFavorites() {
+function renderFavorites(highlightIds = []) {
   const container = document.getElementById('favoritesList');
   
   if (favorites.length === 0) {
@@ -535,20 +589,32 @@ function renderFavorites() {
     return;
   }
   
-  container.innerHTML = favorites.map(fav => `
-    <div class="favorite-item" data-id="${fav.id}">
-      <div class="favorite-haiku">
-        <p>${fav.haiku.line1}</p>
-        <p>${fav.haiku.line2}</p>
-        <p>${fav.haiku.line3}</p>
-        <span class="favorite-emotion">「${fav.emotion}」</span>
+  container.innerHTML = favorites.map(fav => {
+    const isHighlighted = highlightIds.includes(fav.id);
+    const isImported = fav.source === 'imported';
+    const timeText = formatDateTime(fav.timestamp);
+    const sourceText = isImported ? '📥 导入' : '⭐ 收藏';
+    
+    return `
+      <div class="favorite-item ${isHighlighted ? 'newly-imported' : ''}" data-id="${fav.id}"
+           ${isHighlighted ? 'style="animation: highlightPulse 0.6s ease-out 3;"' : ''}>
+        <div class="favorite-haiku">
+          <p>${escapeHtml(fav.haiku.line1)}</p>
+          <p>${escapeHtml(fav.haiku.line2)}</p>
+          <p>${escapeHtml(fav.haiku.line3)}</p>
+          <span class="favorite-emotion">「${escapeHtml(fav.emotion)}」</span>
+          <div class="favorite-meta">
+            <span class="favorite-time">🕐 ${timeText}</span>
+            <span class="favorite-source ${isImported ? 'imported' : ''}">${sourceText}</span>
+          </div>
+        </div>
+        <div class="favorite-actions">
+          <button class="icon-btn load-favorite" title="加载此俳句">📜</button>
+          <button class="icon-btn delete-favorite" title="删除收藏">🗑</button>
+        </div>
       </div>
-      <div class="favorite-actions">
-        <button class="icon-btn load-favorite" title="加载此俳句">📜</button>
-        <button class="icon-btn delete-favorite" title="删除收藏">🗑</button>
-      </div>
-    </div>
-  `).join('');
+    `;
+  }).join('');
   
   container.querySelectorAll('.load-favorite').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -595,9 +661,11 @@ function deleteFavorite(id) {
 }
 
 // ==================== 导出导入功能 ====================
+let pendingImportData = null;
+
 function exportFavorites() {
   if (favorites.length === 0) {
-    alert('没有可导出的收藏数据');
+    showToast('没有可导出的收藏数据', 'warning');
     return;
   }
 
@@ -614,11 +682,161 @@ function exportFavorites() {
   
   const link = document.createElement('a');
   const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  link.download = `俳句收藏_${dateStr}.json`;
+  const fileName = `俳句收藏_${dateStr}.json`;
+  link.download = fileName;
   link.href = url;
   link.click();
   
   URL.revokeObjectURL(url);
+  
+  showToast(`已导出 ${favorites.length} 条收藏到「${fileName}」`, 'success', 4000);
+}
+
+function analyzeImportData(dataToImport) {
+  const validData = dataToImport.filter(item => 
+    item && item.haiku && 
+    item.haiku.line1 && item.haiku.line2 && item.haiku.line3
+  );
+  
+  const duplicates = [];
+  const newItems = [];
+  
+  validData.forEach(item => {
+    const exists = favorites.some(f => 
+      f.haiku.line1 === item.haiku.line1 && 
+      f.haiku.line2 === item.haiku.line2 && 
+      f.haiku.line3 === item.haiku.line3
+    );
+    
+    if (exists) {
+      duplicates.push(item);
+    } else {
+      newItems.push(item);
+    }
+  });
+  
+  return { validData, duplicates, newItems, invalidCount: dataToImport.length - validData.length };
+}
+
+function showImportConfirm(analysis, rawData) {
+  pendingImportData = { analysis, rawData };
+  
+  const modal = document.getElementById('importConfirmModal');
+  const confirmText = document.getElementById('importConfirmText');
+  const preview = document.getElementById('importPreview');
+  
+  const { validData, duplicates, newItems, invalidCount } = analysis;
+  
+  let statsHtml = '';
+  if (validData.length > 0) {
+    statsHtml = `
+      <div class="import-stats">
+        <div class="stat-item">
+          <span class="stat-value">${validData.length}</span>
+          <span class="stat-label">有效数据</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" style="color: #10B981;">${newItems.length}</span>
+          <span class="stat-label">可导入</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-value" style="color: #F59E0B;">${duplicates.length}</span>
+          <span class="stat-label">已存在</span>
+        </div>
+      </div>
+    `;
+  }
+  
+  let message = `文件中包含 ${validData.length} 条有效收藏数据`;
+  if (invalidCount > 0) {
+    message += `，${invalidCount} 条格式错误已自动过滤`;
+  }
+  if (newItems.length === 0 && validData.length > 0) {
+    message += '，全部数据已存在于收藏中';
+  }
+  
+  confirmText.innerHTML = message;
+  
+  let previewHtml = statsHtml;
+  if (validData.length > 0) {
+    previewHtml += '<p style="margin-bottom: 0.5rem; color: var(--text-secondary); font-size: 0.85rem;">数据预览：</p>';
+    previewHtml += validData.slice(0, 5).map(item => {
+      const isDuplicate = duplicates.some(d => 
+        d.haiku.line1 === item.haiku.line1 && 
+        d.haiku.line2 === item.haiku.line2 && 
+        d.haiku.line3 === item.haiku.line3
+      );
+      return `
+        <div class="import-preview-item ${isDuplicate ? 'duplicate' : ''}">
+          <div class="preview-haiku">${escapeHtml(item.haiku.line1)} · ${escapeHtml(item.haiku.line2)} · ${escapeHtml(item.haiku.line3)}</div>
+          <div class="preview-emotion">「${escapeHtml(item.emotion || '未知')}」</div>
+        </div>
+      `;
+    }).join('');
+    
+    if (validData.length > 5) {
+      previewHtml += `<p style="text-align: center; color: var(--text-secondary); font-size: 0.8rem; margin-top: 0.5rem;">... 还有 ${validData.length - 5} 条数据</p>`;
+    }
+  }
+  
+  preview.innerHTML = previewHtml;
+  
+  const confirmBtn = document.getElementById('confirmImportBtn');
+  confirmBtn.disabled = newItems.length === 0;
+  confirmBtn.style.opacity = newItems.length === 0 ? '0.5' : '1';
+  confirmBtn.style.cursor = newItems.length === 0 ? 'not-allowed' : 'pointer';
+  
+  modal.style.display = 'flex';
+}
+
+function hideImportModal() {
+  const modal = document.getElementById('importConfirmModal');
+  modal.style.display = 'none';
+  pendingImportData = null;
+}
+
+function executeImport() {
+  if (!pendingImportData) return;
+  
+  const { analysis, rawData } = pendingImportData;
+  const { newItems } = analysis;
+  
+  const importedIds = [];
+  
+  newItems.forEach(item => {
+    const newItem = {
+      id: Date.now() + Math.random(),
+      emotion: item.emotion || '未知',
+      haiku: { ...item.haiku },
+      style: item.style || 'ink',
+      imageUrl: item.imageUrl || '',
+      timestamp: item.timestamp || new Date().toISOString(),
+      source: 'imported',
+      importedAt: new Date().toISOString()
+    };
+    favorites.unshift(newItem);
+    importedIds.push(newItem.id);
+  });
+  
+  localStorage.setItem('haikuFavorites', JSON.stringify(favorites));
+  renderFavorites(importedIds);
+  updateFavoriteButton();
+  
+  const duplicateCount = analysis.duplicates.length;
+  const invalidCount = analysis.invalidCount;
+  
+  if (importedIds.length > 0) {
+    let message = `成功导入 ${importedIds.length} 条收藏`;
+    if (duplicateCount > 0) {
+      message += `，已跳过 ${duplicateCount} 条重复数据`;
+    }
+    if (invalidCount > 0) {
+      message += `，已过滤 ${invalidCount} 条无效数据`;
+    }
+    showToast(message, 'success', 5000);
+  }
+  
+  hideImportModal();
 }
 
 function importFavorites(file) {
@@ -642,55 +860,21 @@ function importFavorites(file) {
         throw new Error('文件中没有有效的收藏数据');
       }
       
-      const validData = dataToImport.filter(item => 
-        item && item.haiku && 
-        item.haiku.line1 && item.haiku.line2 && item.haiku.line3
-      );
+      const analysis = analyzeImportData(dataToImport);
       
-      if (validData.length === 0) {
+      if (analysis.validData.length === 0) {
         throw new Error('文件中没有有效的俳句数据');
       }
       
-      let importCount = 0;
-      validData.forEach(item => {
-        const exists = favorites.some(f => 
-          f.haiku.line1 === item.haiku.line1 && 
-          f.haiku.line2 === item.haiku.line2 && 
-          f.haiku.line3 === item.haiku.line3
-        );
-        
-        if (!exists) {
-          const newItem = {
-            id: Date.now() + Math.random(),
-            emotion: item.emotion || '未知',
-            haiku: { ...item.haiku },
-            style: item.style || 'ink',
-            imageUrl: item.imageUrl || '',
-            timestamp: item.timestamp || new Date().toISOString()
-          };
-          favorites.unshift(newItem);
-          importCount++;
-        }
-      });
-      
-      localStorage.setItem('haikuFavorites', JSON.stringify(favorites));
-      renderFavorites();
-      updateFavoriteButton();
-      
-      const duplicateCount = validData.length - importCount;
-      let message = `成功导入 ${importCount} 条收藏`;
-      if (duplicateCount > 0) {
-        message += `，已跳过 ${duplicateCount} 条重复数据`;
-      }
-      alert(message);
+      showImportConfirm(analysis, dataToImport);
       
     } catch (err) {
-      alert('导入失败：' + err.message);
+      showToast('导入失败：' + err.message, 'error', 4000);
     }
   };
   
   reader.onerror = function() {
-    alert('文件读取失败，请重试');
+    showToast('文件读取失败，请重试', 'error');
   };
   
   reader.readAsText(file);
@@ -744,6 +928,21 @@ function initEventListeners() {
     if (file) {
       importFavorites(file);
       e.target.value = '';
+    }
+  });
+
+  document.getElementById('confirmImportBtn').addEventListener('click', executeImport);
+  document.getElementById('cancelImportBtn').addEventListener('click', hideImportModal);
+  
+  document.getElementById('importConfirmModal').addEventListener('click', (e) => {
+    if (e.target.id === 'importConfirmModal') {
+      hideImportModal();
+    }
+  });
+  
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      hideImportModal();
     }
   });
 }
