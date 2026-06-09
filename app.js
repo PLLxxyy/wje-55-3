@@ -594,6 +594,108 @@ function deleteFavorite(id) {
   renderFavorites();
 }
 
+// ==================== 导出导入功能 ====================
+function exportFavorites() {
+  if (favorites.length === 0) {
+    alert('没有可导出的收藏数据');
+    return;
+  }
+
+  const exportData = {
+    version: '1.0',
+    exportedAt: new Date().toISOString(),
+    count: favorites.length,
+    data: favorites
+  };
+
+  const jsonStr = JSON.stringify(exportData, null, 2);
+  const blob = new Blob([jsonStr], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  
+  const link = document.createElement('a');
+  const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  link.download = `俳句收藏_${dateStr}.json`;
+  link.href = url;
+  link.click();
+  
+  URL.revokeObjectURL(url);
+}
+
+function importFavorites(file) {
+  const reader = new FileReader();
+  
+  reader.onload = function(e) {
+    try {
+      const content = e.target.result;
+      const importData = JSON.parse(content);
+      
+      let dataToImport = [];
+      if (importData.version && importData.data) {
+        dataToImport = importData.data;
+      } else if (Array.isArray(importData)) {
+        dataToImport = importData;
+      } else {
+        throw new Error('文件格式不正确');
+      }
+      
+      if (!Array.isArray(dataToImport) || dataToImport.length === 0) {
+        throw new Error('文件中没有有效的收藏数据');
+      }
+      
+      const validData = dataToImport.filter(item => 
+        item && item.haiku && 
+        item.haiku.line1 && item.haiku.line2 && item.haiku.line3
+      );
+      
+      if (validData.length === 0) {
+        throw new Error('文件中没有有效的俳句数据');
+      }
+      
+      let importCount = 0;
+      validData.forEach(item => {
+        const exists = favorites.some(f => 
+          f.haiku.line1 === item.haiku.line1 && 
+          f.haiku.line2 === item.haiku.line2 && 
+          f.haiku.line3 === item.haiku.line3
+        );
+        
+        if (!exists) {
+          const newItem = {
+            id: Date.now() + Math.random(),
+            emotion: item.emotion || '未知',
+            haiku: { ...item.haiku },
+            style: item.style || 'ink',
+            imageUrl: item.imageUrl || '',
+            timestamp: item.timestamp || new Date().toISOString()
+          };
+          favorites.unshift(newItem);
+          importCount++;
+        }
+      });
+      
+      localStorage.setItem('haikuFavorites', JSON.stringify(favorites));
+      renderFavorites();
+      updateFavoriteButton();
+      
+      const duplicateCount = validData.length - importCount;
+      let message = `成功导入 ${importCount} 条收藏`;
+      if (duplicateCount > 0) {
+        message += `，已跳过 ${duplicateCount} 条重复数据`;
+      }
+      alert(message);
+      
+    } catch (err) {
+      alert('导入失败：' + err.message);
+    }
+  };
+  
+  reader.onerror = function() {
+    alert('文件读取失败，请重试');
+  };
+  
+  reader.readAsText(file);
+}
+
 // ==================== 事件绑定 ====================
 function initEventListeners() {
   document.getElementById('generateBtn').addEventListener('click', () => {
@@ -629,6 +731,20 @@ function initEventListeners() {
       currentStyle = btn.dataset.style;
       updatePreview();
     });
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', exportFavorites);
+
+  document.getElementById('importBtn').addEventListener('click', () => {
+    document.getElementById('importFile').click();
+  });
+
+  document.getElementById('importFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      importFavorites(file);
+      e.target.value = '';
+    }
   });
 }
 

@@ -408,6 +408,31 @@ h3 {
   border-top: 1px solid var(--border);
 }
 
+.favorites-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.favorites-header h3 {
+  margin-bottom: 0;
+}
+
+.favorites-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.favorites-actions .icon-btn {
+  width: auto;
+  padding: 0.5rem 1rem;
+  font-size: 0.85rem;
+  gap: 0.25rem;
+}
+
 .favorites-list {
   display: flex;
   flex-direction: column;
